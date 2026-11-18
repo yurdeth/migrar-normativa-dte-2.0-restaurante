@@ -8,7 +8,7 @@ description: >-
   sesiones compartidas entre niveles, helpers duplicados por subcarpeta) o al
   invocarse con /migrar-normativa-dte-2.0-restaurante. Es una EXTENSIÓN de
   migrar-normativa-dte-2.0: ejecuta esa skill como fundamento y aplica las
-  adienciones, sustituciones y recorridos específicos del formato definidos aquí.
+  adiciones, sustituciones y recorridos específicos del formato definidos aquí.
   NO sirve para destinos sin subcarpetas de subsistema (usar la skill base).
 ---
 
@@ -393,7 +393,7 @@ reales de la BD temporal):**
   anulación — adjuntos con contenido (FASE 2.6 de la base) y destinatario
   resuelto desde el receptor del JSON.
 
-## Registro del port (adiencias a la FASE 3 de la base)
+## Registro del port (adiciones a la FASE 3 de la base)
 
 El registro obliga lo de la base (mapa destino, tabla de referencias externas,
 ledger de micro-desviaciones, sección de smokes) y añade:
