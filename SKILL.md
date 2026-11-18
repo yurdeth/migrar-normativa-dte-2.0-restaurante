@@ -106,3 +106,121 @@ descubrirlo. Checklist de verificación mínima antes de portear:
 8. **Carpetas de salida y dueño**: `img/dte/`, `pdfdtes/`, `jsondte/` con
    existencia, propietario y permisos del usuario WEB (no del CLI). Crear las
    que falten con `mkdir` + dueño correcto, o portear el mkdir defensivo.
+
+## Reglas duras del formato (trampas ya resueltas: aplicar de entrada, no descubrir)
+
+Cada regla viene de un defecto REAL ocurrido en el port a un sistema de este
+formato. No son advertencias opcionales: son decisiones de diseño que este
+formato exige y que el port debe materializar DESDE el primer intento. Todas se
+verifican en la FASE 2.8 con el recorrido correspondiente.
+
+### Regla 1 — Sesión UNIFICADA entre niveles
+
+Los tres `login.php` (raíz, pos, meseros) y todos los `_session.php` deben
+resolver el MISMO nombre de cookie. El patrón probado: el nombre se calcula
+contra la RAÍZ del proyecto, constante para todos los puntos de entrada:
+
+```php
+session_name(preg_replace('/[^A-Za-z0-9_-]/', '', basename(dirname(__DIR__))) ?: 'DTE_SESS');
+```
+
+- En archivos de NIVEL RAÍZ (login.php, dashboard, admins): `basename(__DIR__)`.
+- En archivos de pos/ y meseros/ (y sus subdirectorios: la resolución es sobre
+  el directorio del NIVEL, no sobre el del archivo): `basename(dirname(__DIR__))`.
+- **Por qué**: con `basename(__DIR__)` por subsistema, pos resolvía "pos",
+  la raíz el nombre del proyecto → el login raíz redirigía al Cajero a
+  `pos/ordenes.php`, que con OTRA cookie veía sesión vacía → bucle de login.
+- **Verificación obligatoria (FASE 2.8, recorrido A)**: crear sesión desde el
+  login raíz y leerla desde una página de pos y una de meseros; la identidad
+  (`$_SESSION['usuario']`, `id_empleado`, `id_sucursal`) debe ser la misma en
+  los tres. Un solo re-login al desplegar (cookies nuevas = sesiones muertas:
+  avisarlo al usuario en el informe).
+- El aislamiento frente a OTROS proyectos hermanos en el mismo dominio se
+  conserva: el nombre sigue derivado del directorio del proyecto.
+
+### Regla 2 — Helpers triplicados y el require cruzado de `_core` desde `clases/`
+
+- Todo cambio en `_helper.php` de la raíz evalúa si requiere copia en
+  `pos/` y `meseros/` (funciones que consumen esos niveles: impresión,
+  llevar/domicilio, sesiones, constantes compartidas). La copia lleva las
+  variantes propias del nivel, no es copy-paste ciego.
+- **NUNCA un `clases/` (o `models/`) compartido requiere el `_core.php` de la
+  raíz.** Cadena real que reventó: endpoint en `pos/procesos/` → modelo de
+  pos → modelo base → `QueryBuilder` → require de `_core.php` RAÍZ → carga
+  `_helper.php` + `_conexion.php` de la raíz → colisión con los de pos
+  ("Cannot redeclare") → 500. El desenlace dependía del CWD del request
+  (desde `pos/` sobrevivía por dedupe de realpath; desde `pos/procesos/`
+  cargaba ambas versiones y moría): por eso el fallo se veía en unos
+  endpoints sí y otros no, sin tocar el mismo código. Los modelos compartidos
+  deben ser autocontenidos (sus cargadores ya bootean el `_core` de su nivel)
+  y los cargadores por nivel deben deduplicar por realpath.
+- **Verificación**: ejecutar por HTTP local (o CLI con el cwd del nivel) un
+  endpoint de CADA subdirectorio que use modelos: 200 con JSON limpio.
+
+### Regla 3 — El admin vivo es el endpoint SSP, no la función de render de la página
+
+- Antes de modificar cualquier menú por fila, columna de estado o acción de un
+  admin: identificar el endpoint SSP real (URL ajax del JS) y hacer ahí el
+  cambio. Insertar el cambio en `mostrarDatos()`/render PHP de la página
+  cuando la tabla la sirve el SSP = código muerto que "está portado" y el
+  usuario jamás ve (ocurrió con el evento de retorno: quedó en una función que
+  la página ni ejecutaba).
+- **Conteo th↔dt SIEMPRE**: cada columna agregada al `<thead>` exige la
+  columna correspondiente en el array del endpoint (y re-indexar las
+  siguientes). El síntoma del desalineo es el warning "Requested unknown
+  parameter 'N'" de DataTables.
+- **WHERE calificados**: al portar columnas nuevas (la migración agrega
+  `id_sucursal` a `cliente`, etc.), cualquier WHERE de endpoint con JOIN que
+  use un nombre ahora ambiguo se califica con el alias de tabla
+  (`F.id_sucursal`). Barrer TODOS los `*_dt.php` del destino buscando el
+  nombre agregado sin prefijo en queries con JOIN.
+- **Hoisting de funciones PHP**: una función definida con guard
+  `function_exists` DESPUÉS del código que la llama NO existe al momento de la
+  llamada (las declaraciones condicionales no se hoistean). Los helpers que un
+  endpoint necesita van INCONDICIONALES al inicio del archivo o antes del
+  primer uso top-level. Verificar posición real, no presencia del nombre.
+  Igual para las clases: instanciar la que define el `factForm.php` del
+  DESTINO (típicamente `FactForm`; `PDFact` suele vivir en otro archivo que
+  estos generadores no cargan).
+
+### Regla 4 — Dos generadores PDF conviviendo (normativo vs legacy del admin)
+
+Este formato suele tener DOS caminos de PDF para el mismo documento:
+el **normativo** (flujo del cobro/anulación → generador 2.0 con marca de agua,
+QR, logo, envío) y el **legacy preexistente** (botones "Pdf"/"Enviar" del
+admin → generador propio del destino). Reglas:
+
+- TODOS los elementos visuales normativos (marca de agua ANULADO, sello de
+  evento de retorno, distrito, versión) se espejan TAMBIÉN al generador
+  legacy si el admin lo usa, con el diseño literal del normativo — salvo que
+  el usuario decida lo contrario (la decisión de unificar/re-cablear es SUYA;
+  por defecto conviven).
+- La salida `output=file`/`output=text` del generador normativo debe responder
+  JSON limpio (ob_start + captura de notices) para que el JS del flujo pueda
+  consumir el objeto y no texto contaminado.
+- Carpetas de QR/PDF con `mkdir` defensivo + dueño `www-data` (si el CLI
+  creó la carpeta, php-fpm no puede escribir: Permission denied).
+
+### Regla 5 — Correo: columnas del destino y guards de CC/BCC
+
+- La factura del destino usa `alias_tipodoc`, NO `tipo_documento` (columna
+  que no existe). Grep de `tipo_documento` en TODOS los bloques portados de
+  correo/PDF/anulación antes de cerrar: este defecto se repitió tres veces en
+  el port real y su modo de falla es silencioso (destinatario vacío → el
+  proveedor de correo rechaza y el catch lo traga).
+- Guards de CC/BCC LOOSE con vacío: `== false || == 'false' ||
+  trim((string)$x) === ''` — el `.env` trae esas claves VACÍAS y un string
+  vacío enviado como Cc rechaza el envío completo.
+- El destinatario real del DTE lo resuelve el receptor del JSON (que refleja
+  el email capturado/guardado en el cobro), no una variable suelta del
+  generador: trazar esa cadena en la FASE 2.6.
+
+### Regla 6 — Recargas POST-acción, nunca en carrera
+
+Toda acción que dispara axios/fetch (generar DTE, anular, enviar correo,
+evento de retorno) debe recargar la vista del admin DESPUÉS de que la promesa
+termina (`await`/`.then()` con pausa breve), nunca con un `setTimeout` que
+corre en paralelo: la recarga aborta el PDF/correo a medio camino y el
+usuario ve éxito a medias sin error. Aplica a los DOS caminos gemelos del
+formato: el del cobro (JS auto) y el del admin (JS manual) — auditarlos
+JUNTOS, comparten helpers.
