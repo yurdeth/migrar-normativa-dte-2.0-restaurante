@@ -334,3 +334,96 @@ y esos scripts parsean por PIPES con un número FIJO de campos. Reglas:
    según la plataforma del cliente (SO de la caja) cuando aplique.
 6. Verificación (FASE 2.8): reimprimir una orden real y CONTAR los campos del
    texto generado contra el `explode` del script destino, por cada formato.
+
+## Distritos select2 en el formato restaurante (los modales mandan)
+
+La base define el port de distritos con búsqueda y cascada inversa. En este
+formato añade tres exigencias propias, todas con falla real detrás:
+
+1. **Los modales con contenido AJAX re-inicializan widgets con scripts
+   inline.** El modal de edición suele inyectar el HTML del formulario por
+   AJAX (archivo `editar_*.php` del subsistema) con SU script inline que hace
+   `$(".select").select2()` genérico DESPUÉS del load — pisando el init AJAX
+   del distrito puesto por el JS principal ("la última llamada gana"). Fix:
+   en el script inline, `.not('#distrito')` en TODOS los inits genéricos y
+   inicializar ahí el select2 AJAX del distrito con `dropdownParent` del
+   modal correspondiente. Esto aplica a cada vista de edición de cada nivel
+   (agregar y editar son archivos/scripts DISTINTOS: el fix va en ambos).
+2. **Cascada inversa con triggers namespaced**: `trigger("change.select2")`,
+   nunca `trigger("change")` plano — el sitio ya tiene handlers `change`
+   propios que recargan municipios y limpian la selección (síntoma: al elegir
+   distrito, el municipio vuelve a "Seleccione"). Tras recargar, re-seleccionar
+   explícitamente el municipio destino.
+3. **El frente cuenta por ARCHIVO**: agregar y editar por nivel (ABM raíz +
+   ABM pos si ambos existen) son piezas separadas; el frente solo cierra cuando
+   TODAS materializan la búsqueda. Es el análogo de venta/venta2 de la base.
+
+## FASES 2.4-2.8 del formato: recorridos obligatorios
+
+Las fases 2.4 (lectura comprensiva), 2.5 (coherencia lógica), 2.6 (contrato
+de correo), 2.7 (símbolos) y 2.8 (smokes) de la base se ejecutan COMPLETAS.
+Este formato define su contenido mínimo:
+
+**Recorridos obligatorios de la FASE 2.8 (cada uno con cookie jar y datos
+reales de la BD temporal):**
+
+- **A. Sesión cruzada por perfil**: login raíz → identidad leída desde página
+  de pos Y de meseros (Regla 1). Luego login como cajero → cae en órdenes de
+  pos con sesión viva; login como mesero → cae en venta de meseros.
+- **B. Cobro completo**: abrir modal de pago → buscador de clientes responde
+  (con y sin texto) → seleccionar cliente de ficha → correo prellenado →
+  cobrar → factura con `sumas` correcto por tipo (COF y CCF) → DTE generada
+  (respuesta MH simulada por contrato si no hay autorización de transmisión)
+  → sello visible en el admin de facturas de pos tras la recarga.
+- **C. Reimpresión de orden finalizada**: texto generado con el nº de campos
+  exacto del script de impresión destino (por cada formato de plataforma).
+- **D. Endpoints de cada subdirectorio**: un GET/POST por endpoint tocado en
+  `pos/`, `pos/procesos/`, `meseros/` — 200, JSON limpio sin notices (Regla 2:
+  el cwd cambia el desenlace de los requires cruzados).
+- **E. Generadores PDF por ambos caminos**: normativo (cobro/admin) y legacy
+  (botones del admin) — PDF válido con logo, QR y marca de agua según estado;
+  `output=file` responde JSON limpio.
+- **F. Distritos en los 4+ frentes**: búsqueda por texto en cada formulario
+  (agregar/editar por nivel), cascada inversa que rellena departamento y
+  municipio SIN perderlos.
+- **G. Evento de retorno**: visible SOLO en DTE recibidas COF/EXP/FAC no
+  anuladas (MH no acepta retorno sobre CCF); volver al admin de origen tras
+  generar/cancelar (referrer o fallback).
+- **H. Correo por las 4 rutas**: cobro automático, botón del admin, reenvío y
+  anulación — adjuntos con contenido (FASE 2.6 de la base) y destinatario
+  resuelto desde el receptor del JSON.
+
+## Registro del port (adiencias a la FASE 3 de la base)
+
+El registro obliga lo de la base (mapa destino, tabla de referencias externas,
+ledger de micro-desviaciones, sección de smokes) y añade:
+
+- **Tabla de copias de helpers**: cada función/helper tocado con sus copias
+  por nivel y qué variación recibió cada una.
+- **Matriz de frentes del cobro**: página(s) de órdenes en uso × builders ×
+  cambios aplicados (la prueba de "¿esté donde esté cobrando?" de la base).
+- **Veredicto de residuos**: venta*.php de pos y páginas heredadas, con las
+  evidencias del método de clasificación exhaustiva de la base.
+- **Convención de sumas por tipo** aplicada al cobro y las reparaciones de
+  datos históricas si hubo.
+- **Contratos de impresión** descubiertos por plataforma cliente (los campos
+  exactos de cada `explode`).
+- **Aviso de re-login**: el despliegue invalida cookies (nombre de sesión
+  unificado o nuevo) — avisarlo siempre en el informe final.
+
+## Cierre del formato (checklist mínimo antes de dar el port por terminado)
+
+1. Los tres niveles comparten cookie y los tres logins/redirecciones por
+   perfil funcionan (recorrido A).
+2. Un cobro real por COF y por CCF deja `factura` con los campos 2.0 correctos
+   y `factura_pago` poblado (recorrido B).
+3. El admin vivo de cada nivel muestra estado/sello/acciones nuevas vía SU
+   endpoint SSP con th↔dt alineados (Regla 3).
+4. La reimpresión imprime completa y ordenada (recorrido C).
+5. Ningún endpoint de subdirectorio muere por requires cruzados (recorrido D).
+6. Los DOS generadores PDF muestran logo/QR/marca de agua según estado
+   (recorrido E).
+7. El correo sale por las 4 rutas con adjunto íntegro (recorrido H).
+8. Registro completo entregado en `tmp/` del destino, con los pendientes del
+   usuario (aplicar SQL a la BD live si el deploy no lo hizo, permisos de los
+   módulos nuevos, pruebas ambiente 00 con sus certificados).
