@@ -224,3 +224,81 @@ corre en paralelo: la recarga aborta el PDF/correo a medio camino y el
 usuario ve éxito a medias sin error. Aplica a los DOS caminos gemelos del
 formato: el del cobro (JS auto) y el del admin (JS manual) — auditarlos
 JUNTOS, comparten helpers.
+
+## El frente crítico: el cobro del restaurante
+
+Por aquí pasa TODA venta real. El flujo canónico del formato: página de
+órdenes de `pos/` → JS de órdenes (modal de pago) → payload al endpoint de
+cobro → finalización de orden + fila de factura → generación DTE automática
+desde el navegador → PDF/correo → recarga. Todo cambio normativo u opcional
+del flujo de venta se aplica a este frente con estas reglas concretas:
+
+### 1. El cobro debe escribir los campos que la normativa 2.0 consume
+
+El cobro legacy del formato normalmente NO escribía los campos que los
+generadores 2.0 leen de `factura`. Al portar, el endpoint de cobro debe
+escribir: `sumas` (con convención por tipo, ver abajo), `credito`,
+fila(s) en la tabla de pagos de factura (`factura_pago` o equivalente),
+`datos_extra` (observaciones del modal) y el email del cliente si cambió.
+
+**Convención de `sumas` (se aprendió con un rechazo real de CALCULO
+INCORRECTO):** `factura.sumas` alimenta el `totalGravada` del RESUMEN del DTE,
+mientras el CUERPO se calcula desde el detalle:
+
+- **COF (01, consumidor final) y tipos con precios CON IVA**: `sumas` = total
+  cobrado tal cual (el cuerpo también suma con IVA: cuadran).
+- **CCF (03) y tipos con precios NETOS**: `sumas` = `round(total/(1+iva),4)`
+  (el cuerpo publica netos; el resumen debe netear igual o MH rechaza por
+  descuadre cuerpo/resumen).
+- Todo TIPO NUEVO define su convención al escribir `sumas`; la regla semántica
+  es: `sumas` = la base que el resumen del tipo espera. Reparar con UPDATE las
+  filas históricas del tipo afectado si ya existen.
+- Verificación canónica (FASE 2.8): correr los calculadores puros
+  (cuerpo+resumen) por tipo con una orden real y comparar totales ítem a ítem.
+
+### 2. El payload del cobro se toca en TODOS los builders
+
+El JS del cobro suele construir el payload en DOS sitios (dos builders: el del
+botón de imprimir/pagar y el del flujo alternativo). Cualquier campo nuevo
+(observaciones, correo del cliente) se agrega en AMBOS. Igual con los
+handlers de cambio de cliente: el prefill del correo en el modal se hace en
+TODOS los handlers `cambia_cliente` existentes, alimentado por el endpoint
+que devuelve la ficha (verificar que devuelva `email`).
+Los selectores de inputs insertados dinámicamente en el modal se escriben por
+ID real (`$('#correo_cliente')`), no por contenedor (`$('.modal-body #x')`):
+la colocación física del input dentro de la estructura del modal varía y el
+selector por contenedor se desincroniza.
+
+### 3. Buscador de clientes del modal de pago (select2 AJAX)
+
+- `type: "post"` SIEMPRE (el dispatcher del backend responde a `$_POST`; un
+  GET silencioso produce "Searching" eterno).
+- `dropdownParent: <el modal del pago>` para que el `enforceFocus` de
+  Bootstrap no le robe el foco al cuadro de búsqueda (síntoma: no se puede
+  escribir).
+- El endpoint del buscador EXCLUYE clientes sin nombre (`AND nombre != ''`):
+  este formato acumula clientes VACÍOS generados por órdenes para llevar/
+  domicilio sin cliente, y `ORDER BY nombre` los pone siempre en la primera
+  página (dropdown de `<li>` vacíos).
+- Guard en llevar/domicilio (pos y meseros): sin cliente/nombre no inserta
+  cliente vacío; usa el cliente genérico de mostrador (-1). Reportar al usuario
+  la limpieza opcional de los vacíos históricos (con conteo y consulta lista),
+  nunca ejecutarla por iniciativa propia.
+
+### 4. El flujo automático de DTE del cobro (JS auto)
+
+- El JS auto (`dte_auto` o equivalente) y el JS manual del admin comparten
+  helpers y rutas gemelas: auditarlos JUNTOS (Regla 6 y FASE 2.6 de la base).
+- La generación automática llama al generador normativo (no al legacy del
+  admin) y espera la promesa completa antes de recargar.
+- La transmisión a MH en este formato sale del NAVEGADOR vía el proxy CORS de
+  pos (`proxydte.php`): el mapa destino debe tener esa cadena documentada
+  (JS auto → proxy → respuesta → guardado) y el port NO la re-cablea
+  server-side aunque el origen lo haga así.
+
+### 5. Prefill y modal de pago: verificación del recorrido completo
+
+El recorrido de aceptación de este frente es: abrir modal → buscar cliente →
+seleccionar → nombre y correo prellenados → cobrar → orden finalizada +
+factura con `sumas` correcto por tipo → DTE generada → PDF con logo/QR →
+correo enviado → admin recargado mostrando la fila nueva con sello.
