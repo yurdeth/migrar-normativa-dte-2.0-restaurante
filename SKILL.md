@@ -302,3 +302,35 @@ El recorrido de aceptación de este frente es: abrir modal → buscar cliente �
 seleccionar → nombre y correo prellenados → cobrar → orden finalizada +
 factura con `sumas` correcto por tipo → DTE generada → PDF con logo/QR →
 correo enviado → admin recargado mostrando la fila nueva con sello.
+
+## Impresión local: contratos por pipes, no líneas libres
+
+La reimpresión de comandas/tickets de este formato NO va por HTML: la página
+de órdenes finalizadas arma un TEXTO que manda a un script local de impresión,
+y esos scripts parsean por PIPES con un número FIJO de campos. Reglas:
+
+1. **Descubrir el contrato real ANTES de tocar la impresión**: leer el script
+   de impresión de cada plataforma cliente (típicamente uno para caja Linux y
+   otro para Windows/meseros) y contar sus `explode('|')`/campos esperados.
+   El contrato usual: 6 campos para caja (`tiquete|fecha|ubicacion|venta|total|totaltxt`)
+   y 7 para meseros/Windows (`tiquete|fecha|mesero|venta|total|a_pagar|totaltxt`).
+   Son contratos DEL CLIENTE: pueden variar — el fuente de verdad es su script,
+   no esta skill.
+2. **El texto de la orden va en UN solo string con ese número exacto de
+   campos**, no en líneas libres con pipes por ítem: un pipe de más desalinea
+   el explode (síntoma real: un solo ítem impreso, texto corrido, totales
+   equivocados). El detalle de ítems va DENTRO del campo que el script
+   reserve para él, con el separador interno que ese campo use (comas/saltos).
+3. **Dos flujos de impresión conviven**: el flujo de cocina/bar marca
+   `impreso='0'` al imprimir (y por eso un `print_orden` filtrando ese flag
+   devuelve vacío en reimpresiones); la REIMPRESIÓN de órdenes finalizadas
+   usa una función aparte sin filtro de `impreso`, con TODOS los ítems. No
+   "unificar" ambas: son flujos distintos con semántica distinta.
+4. **Orden de ítems**: `ORDER BY id_producto` (o el criterio que use la
+   pantalla al mostrar la orden) para que el ticket calce con lo que el
+   usuario ve; no el orden de inserción.
+5. La función de impresión para finalizadas vive en el helper del nivel
+   (Regla 2: copia en pos y meseros), y la página que reimprime elige formato
+   según la plataforma del cliente (SO de la caja) cuando aplique.
+6. Verificación (FASE 2.8): reimprimir una orden real y CONTAR los campos del
+   texto generado contra el `explode` del script destino, por cada formato.
