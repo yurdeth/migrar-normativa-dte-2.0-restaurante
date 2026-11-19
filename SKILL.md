@@ -17,14 +17,19 @@ description: >-
 ## Qué es esta skill y cómo se relaciona con la base
 
 **Esta skill NO reemplaza a `migrar-normativa-dte-2.0`: la REQUIERE.** La skill
-base define el método completo (principios, FASE 1 de BD con sync_schema y
-catálogos MH, port selectivo por commit, auditorías de coherencia/correo/
-símbolos, smokes de ejecución, registro). Ejecútala COMPLETA como fundamento;
-esta skill define lo que CAMBIA en destinos de formato restaurante:
+base define el método general (principios, FASE 1 de BD con sync_schema y
+catálogos MH, port selectivo por commit, auditorías de coherencia lógica
+(FASE 2.5), de correo (FASE 2.6) y de símbolos (FASE 2.7), y el cierre con
+registro). Ejecútala COMPLETA como fundamento. **Esta skill define ADEMÁS tres
+fases propias del formato** — FASE 0 (mapa/verificación del destino), FASE 2.4
+(lectura comprensiva y adaptación de esquema/datos) y FASE 2.8 (smokes de
+ejecución y recorridos de usuario) — que la base NO trae: en destinos de
+restaurante son tan obligatorias como las de la base, y esta skill manda sobre
+ellas. En resumen, lo que CAMBIA en destinos de formato restaurante:
 
-- **SUSTITUCIONES**: donde esta skill redefine una fase para el formato (la
-  FASE 0 pasa de descubrimiento a verificación del mapa esperado; los recorridos
-  de la FASE 2.8 son los del restaurante), lo definido AQUÍ manda.
+- **SUSTITUCIONES**: donde esta skill redefine un punto para el formato (el
+  mapa del destino se VERIFICA contra el perfil esperado en vez de descubrirse;
+  los recorridos de smokes son los del restaurante), lo definido AQUÍ manda.
 - **ADICIONES**: los frentes y trampas propias del formato (cobro con convención
   de montos, impresión por pipes, triples helpers, endpoints SSP) son trabajo
   obligatorio adicional que la base no conoce.
@@ -68,10 +73,16 @@ artefactos aislados.
 
 ## FASE 0 (del formato) — Verificación del mapa esperado
 
-La FASE 0 de la base se ejecuta igual (leer `AGENTS.md`/`CLAUDE.md`/READMEs
-completos, crear `AGENTS.md` si falta, `tmp/MAPA_DESTINO.md` como artefacto),
-pero con este formato el trabajo es **CONFIRMAR el mapa esperado**, no
-descubrirlo. Checklist de verificación mínima antes de portear:
+Antes de portear: buscar y LEER completos los archivos de contexto del destino
+(`AGENTS.md`, `CLAUDE.md`, `README.md` — raíz y de cada subcarpeta); si no
+existen, construir ese contexto por exploración (bootstraps, entry points,
+estructura, menús) y **crear `AGENTS.md`** al terminar la fase. El artefacto
+obligatorio es `tmp/MAPA_DESTINO.md`: las fases siguientes citan ese mapa en
+cada verificación de "¿dónde se ejecuta?" y "¿existe esta columna?", y el
+registro del cierre lo incluye como evidencia; si durante el port aparece un
+dato que contradice el mapa, actualizarlo y anotar la corrección. Con este
+formato, el trabajo es **CONFIRMAR el mapa esperado**, no descubrirlo.
+Checklist de verificación mínima antes de portear:
 
 1. **Existencia y variantes**: confirmar que existen los niveles del perfil
    (raíz, `pos/`, `meseros/`, API móvil) y sus bootstraps. Anotar VARIACIONES
@@ -360,9 +371,29 @@ formato añade tres exigencias propias, todas con falla real detrás:
 
 ## FASES 2.4-2.8 del formato: recorridos obligatorios
 
-Las fases 2.4 (lectura comprensiva), 2.5 (coherencia lógica), 2.6 (contrato
-de correo), 2.7 (símbolos) y 2.8 (smokes) de la base se ejecutan COMPLETAS.
-Este formato define su contenido mínimo:
+Las FASES 2.5 (coherencia lógica), 2.6 (contrato de correo) y 2.7 (colisiones
+de símbolos) de la BASE se ejecutan COMPLETAS, tal como las define. Las fases
+2.4 y 2.8 las DEFINE esta skill (la base no las trae) y son igual de
+obligatorias:
+
+- **FASE 2.4 — Lectura comprensiva y adaptación de esquema/datos**: cero grep
+  como método de verificación de contenido. Por cada función/bloque portado,
+  leer el cuerpo COMPLETO (grep/sed permitidos para EXTRAER el bloque íntegro,
+  de llave a llave o `<?php` a `?>`; prohibido el muestreo de líneas cercanas
+  al match) y producir la **tabla de referencias externas** (cada referencia
+  usada y no definida → dónde vive en el destino → ✓ / adaptada / PENDIENTE).
+  Adaptar columnas y CONVENCIONES de valores al esquema real del destino
+  (nada del origen "porque compila": el fallo es silencioso), barrer el radio
+  de explosión del out.sql (columnas agregadas que vuelven ambiguo un WHERE
+  con JOIN → calificar), y registrar TODA micro-desviación del origen en el
+  ledger (qué cambió, por qué, qué verificación de ejecución la valida).
+- **FASE 2.8 — Smokes de ejecución local y recorrido de usuario** (abajo).
+  **Precondición**: preguntar al usuario AL INICIO (junto con los parámetros,
+  vía diálogo interactivo) si autoriza crear una BD TEMPORAL con su dump +
+  migración aplicada para correr ahí las verificaciones sin arriesgar datos
+  ("se elimina al terminar. ¿La creo?"). Con autorización, TODA sonda corre
+  contra esa copia; sin ella, los recorridos quedan PENDIENTES explícitos
+  (nunca contra la BD viva, nunca simulados).
 
 **Recorridos obligatorios de la FASE 2.8 (cada uno con cookie jar y datos
 reales de la BD temporal):**
@@ -395,8 +426,23 @@ reales de la BD temporal):**
 
 ## Registro del port (adiciones a la FASE 3 de la base)
 
-El registro obliga lo de la base (mapa destino, tabla de referencias externas,
-ledger de micro-desviaciones, sección de smokes) y añade:
+El registro obliga lo que la FASE 3 de la base ya pide (qué se portó por
+archivo y qué se dejó fuera con su commit, cadenas de llamadas verificadas,
+correcciones de coherencia lógica de la FASE 2.5, matriz del correo de la
+FASE 2.6, decisiones condicionales, equivalencias origen→destino, verificación
+por comportamiento, veredicto de venta2, personalizaciones PDF del cierre) y
+ADEMÁS, por ser fases propias de este formato:
+
+- **El `MAPA_DESTINO.md` de la FASE 0** (o referencia a `AGENTS.md` si este lo
+  cubre), citado como base de toda verificación de ubicación/esquema.
+- **La tabla de referencias externas de la FASE 2.4** (referencia → dónde vive
+  en el destino → estado), con los mapeos de columnas origen→destino.
+- **El ledger de micro-desviaciones de la FASE 2.4** (desviación → por qué →
+  verificación que la valida).
+- **La sección "Smokes de ejecución" de la FASE 2.8** (recorrido → método →
+  esperado vs obtenido → defecto/fix).
+
+Y añade lo específico del formato:
 
 - **Tabla de copias de helpers**: cada función/helper tocado con sus copias
   por nivel y qué variación recibió cada una.
