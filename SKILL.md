@@ -394,6 +394,28 @@ obligatorias:
   ("se elimina al terminar. ¿La creo?"). Con autorización, TODA sonda corre
   contra esa copia; sin ella, los recorridos quedan PENDIENTES explícitos
   (nunca contra la BD viva, nunca simulados).
+  **Regla de DOS ESCENARIOS para la BD:**
+  1. **ANTES de la entrega del port (smokes de esta fase): BD TEMPORAL.**
+     Todo el esfuerzo de verificación previa ocurre en la copia — NUNCA
+     contra la BD viva. La copia se elimina al cerrar el port: no arrastrar
+     verificaciones tardías contra ella ni re-copiar datos a ella (copiar
+     registros de la BD real a la copia para "ver el error en contexto" es
+     el antipatrón que esta regla elimina: lento y duplica la fuente).
+  2. **DESPUÉS de la entrega (iteración de fixes reportados por el usuario):
+     BD REAL, directo.** Cuando el usuario prueba el sistema y reporta errores
+     que las smokes no destaparon, el diagnóstico consulta DIRECTAMENTE la
+     BD real del proyecto (leer, ver, contrastar) — sin crear ni usar copias,
+     que en este escenario solo añaden latencia y datos viejos. Lecturas:
+     libres. Escrituras (UPDATE/DELETE/DROP/ALTER): permitidas SOLO cuando el
+     fix o el diagnóstico realmente las requieren, nunca de exploración — y
+     con dos obligaciones: (a) **avisar SIEMPRE al usuario en la respuesta**
+     qué se modificó exactamente (tabla, filas, sentencia) antes o al momento
+     de hacerlo, jamás en silencio; y (b) documentar en el registro del port
+     toda modificación estructural o de datos que deba PERSISTIR (ALTER,
+     repairs de datos, drops), porque el vehículo oficial de cambios de
+     esquema es el out.sql de la migración — una escritura directa que deba
+     quedar en producción se anota como pendiente de SQL o se agrega al
+     out.sql, no se deja solo como efecto colateral del diagnóstico.
 
 **Recorridos obligatorios de la FASE 2.8 (cada uno con cookie jar y datos
 reales de la BD temporal):**
