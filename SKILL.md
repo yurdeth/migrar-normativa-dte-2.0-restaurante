@@ -236,6 +236,87 @@ usuario ve éxito a medias sin error. Aplica a los DOS caminos gemelos del
 formato: el del cobro (JS auto) y el del admin (JS manual) — auditarlos
 JUNTOS, comparten helpers.
 
+### Regla 7 — Nunca entregar una función `async` a jQuery 2.x
+
+Las páginas de `pos/` suelen cargar jQuery 1.x/2.x, cuyo `isFunction` usa
+`[object Function]`: una función `async` da `false`. Pasada como callback se
+descarta en silencio y el flujo muere ahí, sin error visible:
+
+- `$({to:0}).animate({to:1}, d, async function(){...})` → jQuery la toma como
+  CURVA de animación y el temporizador entra en bucle lanzando
+  `n.easing[this.easing] is not a function` (miles por segundo). El toast de
+  antes de ese tramo sale, y eso engaña: el error no es del toast.
+- `{duration: d, complete: async function(){...}}` → tampoco corre.
+
+Patrón: `$({to:0}).animate({to:1}, d, function(){ (async () => {...})(); })`.
+Aplica a `animate`, `.on`, y cualquier opción `complete/done/success` de jQuery;
+no a promesas de axios (`.then(async ...)`) ni a `setTimeout`.
+**Verificación (recorrido B)**: línea de tiempo EN la página (registrador que
+escribe cada cambio de toasts/Swal en `sessionStorage`, que sobrevive a la
+recarga) — un muestreo desde fuera con `evaluate` en bucle se pierde los pasos
+intermedios.
+
+### Regla 8 — Ninguna rama del flujo puede terminar "en el aire"
+
+Auditar el JS del cobro y del admin rama por rama (éxito, rechazo de MH,
+`codigoMsg` ausente, anulación, fallo del reintento): **cada rama termina en
+recarga o en un aviso que el operador ve**. Fallas reales de este formato:
+
+- escribir el resultado en un elemento del modal que no existe en esa página
+  (`#msj`): `null.textContent` corta todo lo que sigue. Verificar con grep que
+  cada `getElementById`/selector usado en el flujo existe en la página que
+  carga ese JS.
+- la rama de rechazo que llama a la corrección de correlativo y no hace nada si
+  esa corrección falla: la pantalla queda con la venta abierta. El reintento
+  debe devolver si arrancó; si no, aviso con el motivo + recarga.
+- los toasts de `pos/` duran ~1.5 s: el aviso del sello de MH debe persistir
+  (`toastr.success(..., {timeOut: 6000, extendedTimeOut: 0})`) y la recarga
+  esperar a que haya estado en pantalla unos 4 s, o el cajero no lo lee.
+
+**No dar un flujo por arreglado porque el sello está en la BD o "no hubo
+errores de JS"**: MH acepta y guarda aunque el navegador se haya detenido
+antes. La evidencia es la línea de tiempo hasta la recarga.
+
+### Regla 9 — Modelos compartidos cargados desde `pos/` (ampliación de la Regla 2)
+
+Un `require` nuevo de `_helpers.php` de raíz desde un modelo (`models/Dte.php`)
+arrastra `_core.php` + `_conexion.php` de raíz dentro de una página de pos:
+redeclara los ~50 helpers de BD, las constantes de impresión y pisaría
+`$conexion` a mitad de una transacción. Materializar:
+
+- en el modelo: `if (!function_exists('_query')) { require .../_core.php; }`
+  (el bootstrap de pos ya abrió conexión);
+- en `_helpers.php` de raíz: `_conexion.php` solo si no hay `_query`, y
+  `function_exists`/`defined()` en TODO nombre que también declare
+  `pos/_helpers.php` o `pos/_conexion.php` (comparar los tres archivos por
+  lista de funciones, no por lectura);
+- el require de `_helpers.php` solo con `realpath`, nunca relativo (desde pos
+  resolvería al de pos).
+
+**Verificación (recorrido D)**: replay por CLI desde `pos/` que cargue
+`_core.php` de pos y el hub, con `$_SESSION['id_usuario']` simulada (los
+modelos hacen `isset($_SESSION["id_usuario"]) or exit(...)`), sin un solo
+notice. Ojo: `_session.php` redirige sin sesión, hay que sembrarla antes.
+
+### Regla 10 — Respuestas JSON limpias y nombres de parámetro JS↔PHP
+
+- Un notice de PHP antes del `echo json_encode` rompe `JSON.parse` y detiene
+  el flujo (visto en el endpoint de anulación). En cada endpoint del dispatcher
+  que responde JSON: `ob_start()` al entrar y `while (ob_get_level()>0)
+  ob_end_clean();` justo antes del echo.
+- El mismo dato viaja con DOS nombres según quién lo manda: `tipodoc` llega
+  como alias (`COF`) desde el cobro y como código MH (`01`) desde el modal de
+  anular del admin. Cada función que traduce tipo debe aceptar ambos (si es
+  numérico es código MH) y devolver vacío si no hay fila, nunca leer
+  `$row[0]` de un resultado sin filas. Y cada par JS→PHP del flujo se revisa
+  nombre por nombre (`tipodoc` vs `tipo_doc` costó un reintento que nunca
+  arrancaba).
+- Los errores atrapados en `catch` (correo sobre todo) no existen para el
+  operador si solo van a `error_log`: o se muestran, o se declara en el
+  registro como fallo silencioso. Para verlos sin logs del servidor: sonda por
+  CLI que carga el bootstrap con sesión simulada y `ini_set('error_log',
+  archivo)`.
+
 ## El frente crítico: el cobro del restaurante
 
 Por aquí pasa TODA venta real. El flujo canónico del formato: página de
@@ -427,7 +508,11 @@ reales de la BD temporal):**
   (con y sin texto) → seleccionar cliente de ficha → correo prellenado →
   cobrar → factura con `sumas` correcto por tipo (COF y CCF) → DTE generada
   (respuesta MH simulada por contrato si no hay autorización de transmisión)
-  → sello visible en el admin de facturas de pos tras la recarga.
+  → sello visible en el admin de facturas de pos tras la recarga. Además, con
+  línea de tiempo (Regla 7): aviso del sello en pantalla y recarga con la
+  venta cerrada; y una venta RECHAZADA por MH (p. ej. `codigoMsg 004`): aviso
+  del rechazo y recarga igual (Regla 8). Anulación desde el admin de pos:
+  JSON limpio del endpoint (Regla 10).
 - **C. Reimpresión de orden finalizada**: texto generado con el nº de campos
   exacto del script de impresión destino (por cada formato de plataforma).
 - **D. Endpoints de cada subdirectorio**: un GET/POST por endpoint tocado en
@@ -435,7 +520,11 @@ reales de la BD temporal):**
   el cwd cambia el desenlace de los requires cruzados).
 - **E. Generadores PDF por ambos caminos**: normativo (cobro/admin) y legacy
   (botones del admin) — PDF válido con logo, QR y marca de agua según estado;
-  `output=file` responde JSON limpio.
+  `output=file` responde JSON limpio. La marca de agua depende de un método de
+  rotación (`Rotate`) de la clase del destino (`FactForm`/`PDFact`): verificar
+  con grep que la clase lo define ANTES de dar el PDF por bueno, y probar con
+  una factura ANULADA y una con evento de retorno (sin marca de agua la
+  ausencia del método no salta).
 - **F. Distritos en los 4+ frentes**: búsqueda por texto en cada formulario
   (agregar/editar por nivel), cascada inversa que rellena departamento y
   municipio SIN perderlos.
@@ -495,3 +584,24 @@ Y añade lo específico del formato:
 8. Registro completo entregado en `tmp/` del destino, con los pendientes del
    usuario (aplicar SQL a la BD live si el deploy no lo hizo, permisos de los
    módulos nuevos, pruebas ambiente 00 con sus certificados).
+9. Ningún callback `async` entregado a jQuery (Regla 7) y toda rama de los
+   flujos JS termina en recarga o aviso (Regla 8).
+10. La cadena de includes de las páginas de pos que cargan modelos/hub de raíz
+    carga sin redeclaraciones ni notices (Regla 9, replay CLI).
+11. Los endpoints JSON responden sin notices delante, y las funciones de tipo
+    de documento aceptan alias y código MH (Regla 10).
+
+**Sobre las afirmaciones del registro**: "ya existe en el destino" escrito en
+un registro previo no es evidencia (un `FactForm::Rotate()` declarado como
+presente no existía). Antes de apoyarse en ella, grep.
+
+**Entregables de BD**: junto al out.sql completo, el cliente de este formato
+suele pedir además una **migración mínima** (`tmp/migracion_minima.sql`): solo
+las tablas nuevas con uso real en el código del destino y las columnas nuevas
+que ese código referencia, sin `id_server`/`unique_id` ni los datos de ejemplo
+del origen, manteniendo corrección de catálogos MH y módulos nuevos. Regla
+práctica de poda de columnas: el código previo al port corre contra la BD del
+destino SIN esas columnas, así que cualquier mención a una columna "nueva" en
+un archivo que el port no tocó es coincidencia de nombre (salvo tablas que
+también se crean); lo que manda son las sentencias SQL que tocan esa tabla en
+los archivos del port.
