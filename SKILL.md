@@ -317,6 +317,60 @@ notice. Ojo: `_session.php` redirige sin sesión, hay que sembrarla antes.
   CLI que carga el bootstrap con sesión simulada y `ini_set('error_log',
   archivo)`.
 
+### Regla 11 — Página con DOS modales: ningún init de widget puede ser global
+
+Una página del subsistema suele alojar el modal de AGREGAR (render inline) y el
+de EDITAR (contenido AJAX con su script inline). El script inline del modal
+AJAX ejecuta `$(".select2")`, `$(".i-checks")`, `$("#porcentaje").niceSelect()`
+**globales** y select2 4.x, al re-inicializar, DESTRUYE y recrea la instancia
+del otro modal — el select2 recreado queda con el `dropdownParent` del modal
+que se está inyectando; al cerrar ese modal su contenido se borra y el dropdown
+del otro queda huérfano del DOM (`$dropdown.parents()` vacío): el click no
+despliega nada y recargar "lo arregla" (por eso el usuario reporta "funciona
+solo después de recargar"). Fix: TODOS los inits de widget llevan el scope de
+su propio modal, en ambos scripts — `$("#modalAgregar .select2")`,
+`$("#modalEditar .select2")`, etc. Igual para iCheck: cada modal inicializa su
+propio `.i-checks` (el checkbox de agregar que depende del init global del
+script de editar está muerto si nunca se abrió editar).
+
+**Doble toggle del checkbox invisible**: con iCheck, el click físico puede
+caer sobre el `input` invisible y disparar el toggle nativo Y el de iCheck
+(netos: el checkbox no cambia nunca). Diagnóstico: `elementFromPoint` en las
+coordenadas del click devuelve INPUT. Fix por CSS, no por handlers extra (un
+`label.on('click')` propio duplica con el handler que iCheck ya liga al
+label): `#modalX .i-checks input{pointer-events:none}` — el cuadro lo alterna
+el envoltorio y el texto lo alterna el handler del label de iCheck, una sola
+vez.
+
+**El checkbox serializa "on"**: PHP que procesa el alta debe aceptar
+`$retiene == 'on' || $retiene == 1` — comparar solo con `1` hace que el flujo
+de INSERTAR ignore el checkbox mientras el de EDITAR (que solo mira el
+porcentaje) "funciona": el usuario reporta "guarda en editar pero no en
+agregar".
+
+**Verificación**: en el navegador real, alternar los dos modales en ambos
+órdenes (agregar→cerrar→editar y editar→cerrar→agregar) y click real sobre
+cada select y el checkbox; el estado interno se inspecciona con
+`jQuery(el).data('select2').$dropdown.parents().length > 0`.
+
+### Regla 12 — Rutas de JS compartido: `rootUrl` solo existe en `pos/`
+
+`js/constantes.js` define `rootUrl` y lo cargan las páginas de `pos/`; las
+páginas de la RAÍZ no lo tienen. Consecuencias ya vividas:
+
+- Un JS compartido que arma URLs con `rootUrl` falla silenciosamente en la
+  raíz (fallback equivocado → URL fuera del proyecto, 404 o redirección a un
+  lugar inexistente). Elegir por contexto: página raíz standalone → rutas
+  relativas simples; página de pos → `rootUrl`. Nunca un fallback `'..'` sin
+  verificar a dónde resuelve.
+- Un archivo de la raíz reconvertido en FRAGMENTO de modal (se inyecta en una
+  página de `pos/`) tiene TODAS sus rutas relativas — `<script src>` y URLs
+  AJAX — resolviendo contra la página host. Revisar ambas capas: el tag del
+  script Y las URLs dentro del JS. Si el fragmento vuelve a página completa,
+  revertir las dos capas, no una.
+- Tras recargar JS corregido, exigir Ctrl+Shift+R al usuario: los scripts sin
+  cache-busting sirven la copia vieja y el fix "no funciona".
+
 ## El frente crítico: el cobro del restaurante
 
 Por aquí pasa TODA venta real. El flujo canónico del formato: página de
@@ -590,6 +644,10 @@ Y añade lo específico del formato:
     carga sin redeclaraciones ni notices (Regla 9, replay CLI).
 11. Los endpoints JSON responden sin notices delante, y las funciones de tipo
     de documento aceptan alias y código MH (Regla 10).
+12. En cada página con modales agregar+editar, alternarlos en ambos órdenes con
+    clicks reales: selects despliegan y el checkbox alterna una vez (Regla 11),
+    y ningún JS compartido usa `rootUrl` fuera de pos/ ni rutas relativas que
+    cambien de sentido según la página host (Regla 12).
 
 **Sobre las afirmaciones del registro**: "ya existe en el destino" escrito en
 un registro previo no es evidencia (un `FactForm::Rotate()` declarado como
